@@ -2,17 +2,34 @@ const fetch = require('node-fetch');
 const readline = require('readline');
 const { email, password } = require('./login.json');
 let authToken = null;
-const getToken = async () => {
-  if (!authToken) {
-    const res = await fetch("https://unipos.me/a/jsonrpc", {
-      body: `{"jsonrpc":"2.0","method":"Unipos.Login","params":{"email_address": "${email}","password":"${password}"},"id":"Unipos.Login"}`,
+
+const callRpc = async (api, method, params, id = method) => {
+    const res = await fetch(`https://unipos.me/${api}/jsonrpc`, {
+      body: JSON.stringify({
+        jsonrpc:"2.0",
+        method:`Unipos.${method}`,
+        params,
+        id: `Unipos.${method}`
+      }),
       headers: {
         Accept: "*/*",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "referrer":"https://unipos.me/all",
+        ...authToken ? { "X-Unipos-Token": authToken } : {}
       },
       method: "POST"
     })
-    const { result: { authn_token } } = await res.json()
+    if (res.ok) {
+      const { result } = await res.json()
+      return result
+    } else {
+      throw `Failed with ${res.status}`
+    }
+}
+
+const getToken = async () => {
+  if (!authToken) {
+    const { authn_token } = await callRpc('a', 'Login', {email_address: email, password});
     authToken = authn_token;
     return authToken;
   } else {
@@ -21,16 +38,7 @@ const getToken = async () => {
 };
 
 const getList = async (after = "", count = 20) => {
-  res = await fetch("https://unipos.me/q/jsonrpc", {
-    body: `{"jsonrpc":"2.0","method":"Unipos.GetCards2","params":{"offset_card_id":"${after}","count":${count}},"id":"Unipos.GetCards2"}`,
-    headers: {
-      Accept: "*/*",
-      "Content-Type": "application/json",
-      "X-Unipos-Token": authToken
-    },
-    method: "POST"
-  });
-  const { result } = await res.json();
+  const result = await callRpc('q', 'GetCards2', { offset_card_id: after, count });
   return result;
 };
 
@@ -46,20 +54,19 @@ const getClap = () => new Promise(resolve => {
 });
 
 const clap = async (id, point) => {
-  fetch("https://unipos.me/c/jsonrpc", {
-    body: `{"jsonrpc":"2.0","method":"Unipos.Praise","params":{"card_id":"${id}","count":${point}},"id":"Unipos.Praise_${id}_${point}"}`,
-    headers: {
-      Accept: "*/*",
-      "Content-Type": "application/json",
-      "X-Unipos-Token": authToken
-    },
-    method: "POST"
-  })
+  return callRpc('c', 'Praise', { card_id: id, count: point }, `Unipos.Praise_${id}_${point}`)
+}
+
+const db=x=>{console.log(x);return x}
+
+const getPoint = async () => {
+  const { member: { pocket: { available_point: point } } } = await callRpc('q', 'GetProfile', []);
+  return point
 }
 
 const main = async() => {
   await getToken();
-  list = await getList("", 60);
+  let [list, point] = await Promise.all([getList("", 60), getPoint()]);
   let idx = 0;
   for (const item of list) {
     console.log('=============================');
@@ -71,10 +78,11 @@ const main = async() => {
   console.log('=============================');
   console.log('=============================');
   while (true) {
+    console.log(`You have ${point} point to send`);
     [id, point] = await getClap();
     const cid = list[id - 1].id;
-    console.log([cid, point]);
     await clap(cid, point);
+    point = await getPoint();
   }
 };
 
